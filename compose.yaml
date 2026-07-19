@@ -1,0 +1,76 @@
+name: llm-filter-sidecar
+
+services:
+  privacy-filter:
+    build:
+      context: "${PRIVACY_FILTER_CONTEXT:-https://github.com/packyme/privacy-filter.git#64b8de3c206059b187d65381189b70c267550392}"
+      dockerfile: Dockerfile
+    image: "${PRIVACY_FILTER_IMAGE:-privacy-filter:64b8de3c2060}"
+    restart: unless-stopped
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      PF_PORT: "8088"
+      PF_GITLEAKS_TOML: "/rules/gitleaks.toml"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-T", "3", "-O", "/dev/null", "http://127.0.0.1:8088/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+  sidecar:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VERSION: "${SIDECAR_VERSION:-dev}"
+    image: "${SIDECAR_IMAGE:-llm-filter-sidecar:local}"
+    restart: unless-stopped
+    user: "${SIDECAR_UID:-1000}:${SIDECAR_GID:-1000}"
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${GATEWAY_PORT:-8080}:8080"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./audit-model-list.txt:/etc/llm-filter-sidecar/audit-model-list.txt:ro
+    environment:
+      LISTEN_ADDR: ":8080"
+      UPSTREAM_URL: "${UPSTREAM_URL:?Set UPSTREAM_URL to the OpenAI-compatible upstream base URL}"
+      UPSTREAM_HEALTH_URL: "${UPSTREAM_HEALTH_URL:-}"
+      REDACTION_URL: "http://privacy-filter:8088"
+      REDACTION_TIMEOUT: "${REDACTION_TIMEOUT:-2s}"
+      AUDIT_ENABLED: "false"
+    depends_on:
+      privacy-filter:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-T", "3", "-O", "/dev/null", "http://127.0.0.1:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"

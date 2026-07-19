@@ -1,0 +1,3 @@
+# One exact, case-sensitive model ID per line.
+# allow mode: listed models skip semantic audit.
+# audit mode: only listed models receive semantic audit.

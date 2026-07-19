@@ -1,0 +1,6 @@
+.env
+.uv-cache/
+.go-cache/
+secrets/
+*.exe
+llm-filter-sidecar

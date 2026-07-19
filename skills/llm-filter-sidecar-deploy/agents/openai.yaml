@@ -1,0 +1,4 @@
+interface:
+  display_name: "LLM Filter Sidecar Deploy"
+  short_description: "Deploy and verify privacy-filtered LLM gateways"
+  default_prompt: "Use $llm-filter-sidecar-deploy to deploy this gateway safely in front of my OpenAI-compatible upstream."

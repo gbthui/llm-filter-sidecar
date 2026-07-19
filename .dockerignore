@@ -1,0 +1,8 @@
+.git
+.github
+.uv-cache
+.go-cache
+secrets
+skills
+*.md
+!audit-prompt.txt

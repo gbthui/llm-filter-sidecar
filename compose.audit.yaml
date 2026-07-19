@@ -1,0 +1,23 @@
+services:
+  sidecar:
+    secrets:
+      - audit_api_key
+      - audit_fingerprint_key
+    environment:
+      AUDIT_ENABLED: "true"
+      AUDIT_URL: "${AUDIT_URL:?Set AUDIT_URL to an OpenAI-compatible chat-completions URL}"
+      AUDIT_MODEL: "${AUDIT_MODEL:?Set AUDIT_MODEL to the semantic audit model ID}"
+      AUDIT_ALLOW_INSECURE_HTTP: "${AUDIT_ALLOW_INSECURE_HTTP:-false}"
+      AUDIT_MODEL_LIST_MODE: "${AUDIT_MODEL_LIST_MODE:-allow}"
+      AUDIT_TIMEOUT: "${AUDIT_TIMEOUT:-10s}"
+      AUDIT_MAX_INPUT_BYTES: "${AUDIT_MAX_INPUT_BYTES:-262144}"
+      AUDIT_API_KEY_FILE: "/run/secrets/audit_api_key"
+      AUDIT_FINGERPRINT_KEY_FILE: "/run/secrets/audit_fingerprint_key"
+      AUDIT_PROMPT_FILE: "/etc/llm-filter-sidecar/audit-prompt.txt"
+      AUDIT_MODEL_LIST_FILE: "/etc/llm-filter-sidecar/audit-model-list.txt"
+
+secrets:
+  audit_api_key:
+    file: "${AUDIT_API_KEY_FILE_HOST:-./secrets/audit_api_key}"
+  audit_fingerprint_key:
+    file: "${AUDIT_FINGERPRINT_KEY_FILE_HOST:-./secrets/audit_fingerprint_key}"

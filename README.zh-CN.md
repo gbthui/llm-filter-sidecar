@@ -53,19 +53,53 @@ docker compose up -d --build --wait --wait-timeout 240
 
 `verify.sh` 的第二个参数是上游面对脚本假 API Key 时的确定状态码。请传入真实预期值，不要用宽泛状态码范围掩盖异常。
 
+该脚本固定使用 `sidecar-smoke-test-invalid-key`。它验证健康状态以及请求确实穿过受保护路由，但不能证明真实上游凭据有效。
+
 默认只监听 `127.0.0.1:8080`。宿主机上游可使用 `http://host.docker.internal:<端口>`；另一个 Compose 项目中的上游应与 sidecar 接入同一个 Docker 网络。
+
+## 上游 Key 与真实请求测试
+
+项目有意不提供 `UPSTREAM_API_KEY` 配置。客户端请求 sidecar 时照常携带 `Authorization: Bearer ...`；sidecar 脱敏请求后，会把该请求头原样转发给上游。使用 OpenAI 兼容 SDK 时，将 `base_url` 指向 sidecar，`api_key` 仍填写真实上游凭据。
+
+命令行测试时，可以把完整请求头写入已被 git 忽略、仅属主可读的文件，避免 key 进入 shell 历史和进程参数：
+
+```bash
+mkdir -p secrets
+chmod 700 secrets
+umask 077
+read -rsp "Upstream API key: " upstream_key
+printf 'Authorization: Bearer %s\n' "$upstream_key" > secrets/upstream-authorization-header
+unset upstream_key
+echo
+
+UPSTREAM_MODEL=你的真实上游模型ID
+curl --silent --show-error --include \
+  --header @secrets/upstream-authorization-header \
+  --header 'Content-Type: application/json' \
+  --data-binary "{\"model\":\"$UPSTREAM_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Reply with OK. My test email is alice@example.invalid.\"}],\"stream\":false}" \
+  http://127.0.0.1:8080/v1/chat/completions
+```
+
+拿到正常上游响应，说明真实鉴权和脱敏转发链路均已走通。该请求头文件只是 `secrets/` 下的本地测试材料，用完即可删除。
 
 ## 启用语义审核
 
 ```bash
 ./scripts/prepare-audit-secrets.sh
-# 安全写入 secrets/audit_api_key，不要把密钥放在命令行。
+read -rsp "Audit provider API key: " audit_key
+printf '%s' "$audit_key" > secrets/audit_api_key
+unset audit_key
+echo
 # Linux 上将 .env 的 SIDECAR_UID/SIDECAR_GID 设置为 `id -u`/`id -g`。
 # 在 .env 中设置 AUDIT_URL 与 AUDIT_MODEL。
 docker compose -f compose.yaml -f compose.audit.yaml config --quiet
 docker compose -f compose.yaml -f compose.audit.yaml up -d --build --wait --wait-timeout 240
 ./scripts/verify.sh http://127.0.0.1:8080 401
 ```
+
+准备脚本会创建权限为 `0600` 的 `secrets/audit_api_key`，并生成独立的 HMAC 指纹密钥 `secrets/audit_fingerprint_key`；它不会生成或猜测审核服务凭据。上面的交互命令负责安全写入审核 key。Compose 会分别挂载到 `/run/secrets/audit_api_key` 与 `/run/secrets/audit_fingerprint_key`。
+
+启用 overlay 后，再执行上一节的真实请求测试。示例的 `allow` 模式模型列表为空，因此合法模型都会接受审核，然后才到达上游。审核 key 缺失、为空或被审核服务拒绝时，必须 fail-closed 并返回 `502 audit_unavailable`。成对的 `403 prompt_flagged` 与放行策略测试见 [`skills/llm-filter-sidecar-deploy/references/policy-testing.md`](skills/llm-filter-sidecar-deploy/references/policy-testing.md)。
 
 审核地址默认必须是 HTTPS。只有在明确受信的私有网络里，才应显式设置 `AUDIT_ALLOW_INSECURE_HTTP=true`。
 

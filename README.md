@@ -54,9 +54,36 @@ docker compose up -d --build --wait --wait-timeout 240
 
 The second verification argument is the exact status your upstream returns for the script's fake API key. Use that known value; the script intentionally does not guess a range of acceptable statuses.
 
+This smoke test deliberately uses `sidecar-smoke-test-invalid-key`. It proves health and traversal through the protected route, but it does not prove that a real upstream credential works.
+
 `compose.yaml` binds to `127.0.0.1` by default and builds `privacy-filter` from commit `64b8de3c206059b187d65381189b70c267550392`. Override `PRIVACY_FILTER_CONTEXT` only as an explicit dependency upgrade.
 
 For an upstream running on the Docker host, use `http://host.docker.internal:<port>`. For an upstream in another Compose project, attach both services to a shared Docker network and use its service name.
+
+## Upstream Key And Real Request Test
+
+There is intentionally no `UPSTREAM_API_KEY` setting. The client sends its real upstream credential to the sidecar in `Authorization: Bearer ...`; the sidecar preserves that header when it forwards the redacted request. For example, an OpenAI-compatible SDK uses the sidecar URL as `base_url` and the upstream credential as its normal `api_key`.
+
+For a command-line test, keep the credential out of shell history and process arguments by putting the complete header in an ignored, owner-readable file:
+
+```bash
+mkdir -p secrets
+chmod 700 secrets
+umask 077
+read -rsp "Upstream API key: " upstream_key
+printf 'Authorization: Bearer %s\n' "$upstream_key" > secrets/upstream-authorization-header
+unset upstream_key
+echo
+
+UPSTREAM_MODEL=your-real-upstream-model
+curl --silent --show-error --include \
+  --header @secrets/upstream-authorization-header \
+  --header 'Content-Type: application/json' \
+  --data-binary "{\"model\":\"$UPSTREAM_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Reply with OK. My test email is alice@example.invalid.\"}],\"stream\":false}" \
+  http://127.0.0.1:8080/v1/chat/completions
+```
+
+A successful upstream response confirms real authentication and traversal through the redaction path. The header file is only a local test fixture under the gitignored `secrets/` directory; delete it when it is no longer needed.
 
 ## Optional Semantic Audit
 
@@ -64,13 +91,20 @@ Audit is off in the base Compose file, so ordinary deployments acquire no audit-
 
 ```bash
 ./scripts/prepare-audit-secrets.sh
-# Populate secrets/audit_api_key without putting the key on a command line.
+read -rsp "Audit provider API key: " audit_key
+printf '%s' "$audit_key" > secrets/audit_api_key
+unset audit_key
+echo
 # On Linux, set SIDECAR_UID and SIDECAR_GID in .env to `id -u` and `id -g`.
 # Set AUDIT_URL and AUDIT_MODEL in .env.
 docker compose -f compose.yaml -f compose.audit.yaml config --quiet
 docker compose -f compose.yaml -f compose.audit.yaml up -d --build --wait --wait-timeout 240
 ./scripts/verify.sh http://127.0.0.1:8080 401
 ```
+
+The script creates `secrets/audit_api_key` with mode `0600` and generates the independent HMAC fingerprint key at `secrets/audit_fingerprint_key`. It never generates or guesses the audit-provider credential; the interactive commands above write that credential without placing it in shell history or command arguments. Compose mounts the two files at `/run/secrets/audit_api_key` and `/run/secrets/audit_fingerprint_key`.
+
+After enabling the overlay, repeat the real request test from the previous section. With the sample empty model list in `allow` mode, the request must be audited and then reach the upstream. A missing, empty, or rejected audit-provider key must instead fail closed with `502 audit_unavailable`. Paired `403 prompt_flagged` and allow-path policy tests are described in [`skills/llm-filter-sidecar-deploy/references/policy-testing.md`](skills/llm-filter-sidecar-deploy/references/policy-testing.md).
 
 The audit endpoint must use HTTPS. `AUDIT_ALLOW_INSECURE_HTTP=true` is an explicit escape hatch for a trusted private Docker network, not a production default.
 
@@ -97,8 +131,10 @@ Every target request is still redacted, regardless of model selection.
 | `AUDIT_MODEL_LIST_MODE` | `allow` | `allow` or `audit` |
 | `AUDIT_TIMEOUT` | `10s` | Audit timeout |
 | `AUDIT_MAX_INPUT_BYTES` | `262144` | Encoded audit input limit |
+| `AUDIT_API_KEY_FILE` | `/run/secrets/audit_api_key` | File containing the audit-provider API key |
+| `AUDIT_FINGERPRINT_KEY_FILE` | `/run/secrets/audit_fingerprint_key` | File containing at least 32 bytes of independent HMAC key material |
 
-Audit keys are file-only. See the complete matrix and security constraints in [`skills/llm-filter-sidecar-deploy/references/configuration.md`](skills/llm-filter-sidecar-deploy/references/configuration.md).
+Upstream credentials are request headers, not sidecar configuration. Audit keys are file-only. See the complete matrix and security constraints in [`skills/llm-filter-sidecar-deploy/references/configuration.md`](skills/llm-filter-sidecar-deploy/references/configuration.md).
 
 Docker Compose implements local file-backed secrets as bind mounts. The sample therefore runs the sidecar as `SIDECAR_UID:SIDECAR_GID` (default `1000:1000`) so `0600` secret files remain readable without making them world-readable. Set both values to the deployment user's `id -u` and `id -g` on Linux. The image itself still defaults to the dedicated UID/GID 65532 when run outside Compose.
 

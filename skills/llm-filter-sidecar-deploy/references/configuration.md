@@ -10,7 +10,7 @@
 | `REDACTION_URL` | `http://privacy-filter:8088` | Base URL of a service implementing `POST /redact/batch` and `GET /health`. |
 | `REDACTION_TIMEOUT` | `2s` | Per-request redaction timeout. |
 
-`UPSTREAM_URL` and `REDACTION_URL` reject userinfo, query parameters, fragments, and non-HTTP(S) schemes. Put authentication in normal request headers; the gateway forwards them to the upstream.
+`UPSTREAM_URL` and `REDACTION_URL` reject userinfo, query parameters, fragments, and non-HTTP(S) schemes. There is no `UPSTREAM_API_KEY` setting: each client sends its real upstream credential in the normal `Authorization` header, and the gateway preserves that header when forwarding the redacted request. For an OpenAI-compatible SDK, point `base_url` at the sidecar and keep the upstream credential in the SDK's normal `api_key` setting.
 
 The public Compose file binds `127.0.0.1:8080` by default. Set `BIND_ADDRESS` and `GATEWAY_PORT` only after checking the reverse proxy and firewall.
 
@@ -34,7 +34,17 @@ Audit stays disabled unless the `compose.audit.yaml` overlay is used or equivale
 | `AUDIT_PROMPT_FILE` | `/etc/llm-filter-sidecar/audit-prompt.txt` | Deployed semantic policy. |
 | `AUDIT_MODEL_LIST_FILE` | `/etc/llm-filter-sidecar/audit-model-list.txt` | Exact, case-sensitive model IDs, one per line. |
 
-Keep both keys out of environment variables and `.env`. Use the repository's `scripts/prepare-audit-secrets.sh`; it refuses to overwrite an existing fingerprint key.
+Keep both keys out of environment variables and `.env`. Use the repository's `scripts/prepare-audit-secrets.sh`; it creates the host files `./secrets/audit_api_key` and `./secrets/audit_fingerprint_key`, and refuses to overwrite an existing fingerprint key. The script generates only the fingerprint key. Securely enter the separate audit-provider credential afterward:
+
+```bash
+./scripts/prepare-audit-secrets.sh
+read -rsp "Audit provider API key: " audit_key
+printf '%s' "$audit_key" > secrets/audit_api_key
+unset audit_key
+echo
+```
+
+The Compose audit overlay mounts those host files at `/run/secrets/audit_api_key` and `/run/secrets/audit_fingerprint_key`. To validate the key rather than only container readiness, send a real target-route request with an audited model. A valid allowed request reaches the upstream; a missing, empty, or rejected audit key fails closed with `502 audit_unavailable`. The repository README provides a real-request curl example that keeps the upstream credential out of command history and process arguments.
 
 ### Model Selection
 
